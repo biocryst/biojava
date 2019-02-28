@@ -27,13 +27,12 @@ import org.biojava.nbio.structure.Structure;
 import org.biojava.nbio.structure.cluster.*;
 import org.biojava.nbio.structure.contact.BoundingBox;
 import org.biojava.nbio.structure.contact.Grid;
-import org.jgrapht.graph.SimpleGraph;
+import org.jgrapht.Graphs;
+import org.jgrapht.graph.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.jgrapht.alg.clique.CliqueMinimalSeparatorDecomposition;
-import org.jgrapht.graph.DefaultEdge;
-import org.jgrapht.graph.AsSubgraph;
 import org.jgrapht.Graph;
 
 import javax.vecmath.Point3d;
@@ -211,7 +210,7 @@ public class QuatSymmetryDetector {
 		if (consideredSubunits.getSubunitCount() < 2)
 			return new ArrayList<>();
 
-		Graph<Integer, DefaultEdge> graph = initContactGraph(nontrivialClusters);
+		Graph<Integer, DefaultWeightedEdge> graph = initContactGraph(nontrivialClusters);
 		Stoichiometry nontrivialComposition = new Stoichiometry(nontrivialClusters,false);
 
 		List<Integer> allSubunitIds = new ArrayList<>(graph.vertexSet());
@@ -264,9 +263,9 @@ public class QuatSymmetryDetector {
 	}
 
 
-	private static  Graph<Integer, DefaultEdge> initContactGraph(List<SubunitCluster> clusters){
+	private static  Graph<Integer, DefaultWeightedEdge> initContactGraph(List<SubunitCluster> clusters){
 
-		Graph<Integer, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
+		Graph<Integer, DefaultWeightedEdge> graph = new SimpleWeightedGraph<>(DefaultWeightedEdge.class);
 
 		// extract Ca coords from every subunit of every cluster.
 		// all subunit coords are used for contact evaluation,
@@ -295,8 +294,10 @@ public class QuatSymmetryDetector {
 				Grid grid = new Grid(CONTACT_GRAPH_DISTANCE_CUTOFF);
 				grid.addCoords(coords1, bb1, coords2, bb2);
 
-				if (grid.getIndicesContacts().size() >= CONTACT_GRAPH_MIN_CONTACTS) {
-					graph.addEdge(i, j);
+				int nContacts = grid.getIndicesContacts().size();
+				if (nContacts >= CONTACT_GRAPH_MIN_CONTACTS) {
+					DefaultWeightedEdge edge = graph.addEdge(i, j);
+					graph.setEdgeWeight(edge,nContacts);
 				}
 			}
 		}
@@ -370,7 +371,7 @@ public class QuatSymmetryDetector {
 	                                                                  final Map<Integer, List<Integer>> clusterIdToSubunitIds,
 	                                                                  QuatSymmetryParameters symmParams,
 	                                                                  Set<Set<Integer>> knownCombinations,
-	                                                                  Graph<Integer, DefaultEdge> graph) {
+	                                                                  Graph<Integer, DefaultWeightedEdge> graph) {
 
 		List<QuatSymmetryResults> localSymmetries = new ArrayList<>();
 
@@ -379,7 +380,7 @@ public class QuatSymmetryDetector {
 			return localSymmetries;
 		}
 		// extract components of a (sub-)graph
-		CliqueMinimalSeparatorDecomposition<Integer, DefaultEdge> cmsd =
+		CliqueMinimalSeparatorDecomposition<Integer, DefaultWeightedEdge> cmsd =
 				new CliqueMinimalSeparatorDecomposition<>(graph);
 
 		// only consider components with more than 1 vertex (subunit)
@@ -437,7 +438,7 @@ public class QuatSymmetryDetector {
 				}
 				knownCombinations.add(prunedGraphVertices);
 
-				Graph<Integer, DefaultEdge> subGraph = new AsSubgraph<>(graph,prunedGraphVertices);
+				Graph<Integer, DefaultWeightedEdge> subGraph = new AsSubgraph<>(graph,prunedGraphVertices);
 
 				List<QuatSymmetryResults> localSubSymmetries = calcLocalSymmetriesGraph(globalComposition,
 																						allSubunitClusterIds,
@@ -496,7 +497,8 @@ public class QuatSymmetryDetector {
 
 	private static QuatSymmetryResults calcQuatSymmetry(Stoichiometry composition, QuatSymmetryParameters parameters) {
 
-		QuatSymmetrySubunits subunits = new QuatSymmetrySubunits(composition.getClusters());
+		List<SubunitCluster> subunitClusters = composition.getClusters();
+		QuatSymmetrySubunits subunits = new QuatSymmetrySubunits(subunitClusters);
 
 		if (subunits.getSubunitCount() == 0)
 			return null;
@@ -520,13 +522,13 @@ public class QuatSymmetryDetector {
 			rotationGroup = solver.getSymmetryOperations();
 		}
 
-		QuatSymmetryResults results = new QuatSymmetryResults(composition,
+		QuatSymmetryResults quatSymmetry = new QuatSymmetryResults(composition,
 				rotationGroup, method);
 
-		String symmetry = results.getSymmetry();
+		String symmetryId = quatSymmetry.getSymmetry();
 
 		// Check structures with Cn symmetry (n = 1, ...) for helical symmetry
-		if (symmetry.startsWith("C")) {
+		if (symmetryId.startsWith("C")) {
 			HelixSolver hc = new HelixSolver(subunits,
 					rotationGroup.getOrder(), parameters);
 			HelixLayers helixLayers = hc.getSymmetryOperations();
@@ -544,16 +546,90 @@ public class QuatSymmetryDetector {
 				double hRmsd = helixLayers.getScores().getRmsd();
 				// System.out.println("cRMSD: " + cRmsd + " hRMSD: " + hRmsd);
 				double deltaRmsd = hRmsd - cRmsd;
-				if (symmetry.equals("C1")
-						|| (!symmetry.equals("C1") && deltaRmsd <= parameters
-								.getHelixRmsdThreshold())) {
+				if (symmetryId.equals("C1") || (deltaRmsd <= parameters.getHelixRmsdThreshold())) {
 					method = SymmetryPerceptionMethod.ROTO_TRANSLATION;
-					results = new QuatSymmetryResults(composition, helixLayers,
-							method);
+					quatSymmetry = new QuatSymmetryResults(composition, helixLayers, method);
 				}
 			}
 		}
 
-		return results;
+		if(parameters.isCalculateAU()) {
+			if(rotationGroup.getOrder()>1) {
+				quatSymmetry.setAsymmetricUnit(calcAsymmetricUnit(subunits,quatSymmetry));
+			} else {
+				quatSymmetry.setAsymmetricUnit(quatSymmetry.getSubunits());
+			}
+		}
+
+		return quatSymmetry;
+	}
+
+	private static List<Subunit> calcAsymmetricUnit(QuatSymmetrySubunits subunits, QuatSymmetryResults quatSymmetry) {
+
+		List<SubunitCluster> clusters = quatSymmetry.getSubunitClusters();
+		List<Integer> allSubunitClusterIds = subunits.getClusterIds();
+
+		Graph<Integer, DefaultWeightedEdge> contactGraph = initContactGraph(clusters);
+
+		Set<Integer> auSubunitInds = new HashSet<>();
+
+		int nRotationsInSymmetry = quatSymmetry.getRotationGroup().getOrder();
+
+		List<Integer> clusterSubunitsInAU = new ArrayList<>(); //may have duplications
+
+		for(int iCluster=0;iCluster<clusters.size();iCluster++) {
+			int nSubunitsInCluster = clusters.get(iCluster).size();
+			int nClusterSubunitsInAU = nSubunitsInCluster/nRotationsInSymmetry;
+			for(int j=0;j<nClusterSubunitsInAU;j++) {
+				clusterSubunitsInAU.add(iCluster);
+			}
+		}
+
+		int startSubunit = subunits.getLargestSubunit();
+
+		auSubunitInds.add(startSubunit);
+
+		int startCluster = allSubunitClusterIds.get(startSubunit);
+		// remove first occurrence of the cluster
+		clusterSubunitsInAU.remove(Integer.valueOf(startCluster));
+		boolean graphConnected = true;
+
+		while (!clusterSubunitsInAU.isEmpty() && graphConnected) {
+			Set<Integer> neighbors = new HashSet<>();
+
+			auSubunitInds.forEach(s->neighbors.addAll(Graphs.neighborListOf(contactGraph,s)));
+
+			Set<Integer> subunitCandidates = neighbors.stream().filter(n->
+					!auSubunitInds.contains(n) && clusterSubunitsInAU.contains(allSubunitClusterIds.get(n))
+			).collect(Collectors.toSet());
+
+			double bestTotalInterface = -1;
+			int bestSubunitCandidate = -1;
+
+			for(int subunitCandidate:subunitCandidates) {
+				Set<Integer> auSubunitsCandidate = new HashSet<>(auSubunitInds);
+				auSubunitsCandidate.add(subunitCandidate);
+				Graph<Integer, DefaultWeightedEdge> subGraph = new AsSubgraph<>(contactGraph,auSubunitsCandidate);
+				double totalInterface = subGraph.edgeSet().stream().mapToDouble(subGraph::getEdgeWeight).sum();
+				if(totalInterface>bestTotalInterface) {
+					bestTotalInterface = totalInterface;
+					bestSubunitCandidate = subunitCandidate;
+				}
+			}
+			if(bestSubunitCandidate>-1) {
+				auSubunitInds.add(bestSubunitCandidate);
+				clusterSubunitsInAU.remove(allSubunitClusterIds.get(bestSubunitCandidate)); // by value
+			} else {
+				graphConnected = false;
+			}
+		}
+
+		if (!graphConnected) {
+			logger.warn("The bioassembly has disconnected subunits. The asymmetric unit is incomplete.");
+		}
+
+		List<Subunit> auSubunits = new ArrayList<>();
+		auSubunitInds.forEach(i->auSubunits.add(quatSymmetry.getSubunits().get(i)));
+		return auSubunits;
 	}
 }

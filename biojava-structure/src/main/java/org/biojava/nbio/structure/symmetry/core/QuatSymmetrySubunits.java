@@ -178,6 +178,7 @@ public class QuatSymmetrySubunits {
 			int length = caCoords.get(i).length;
 			if (length > maxLength) {
 				index = i;
+				maxLength = length;
 			}
 		}
 		return index;

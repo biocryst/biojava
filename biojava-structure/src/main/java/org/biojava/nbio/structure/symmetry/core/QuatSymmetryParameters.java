@@ -60,6 +60,16 @@ public class QuatSymmetryParameters implements Serializable {
 
 	private boolean onTheFly = true;
 
+	public boolean isCalculateAU() {
+		return calculateAU;
+	}
+
+	public void setCalculateAU(boolean calculateAU) {
+		this.calculateAU = calculateAU;
+	}
+
+	private boolean calculateAU = false;
+
 	/**
 	 * @return the rmsdThreshold
 	 */

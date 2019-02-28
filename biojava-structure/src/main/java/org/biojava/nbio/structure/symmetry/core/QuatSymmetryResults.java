@@ -55,6 +55,8 @@ public class QuatSymmetryResults {
 	private SymmetryPerceptionMethod method;
 	private HelixLayers helixLayers;
 	private RotationGroup rotationGroup = new RotationGroup();
+	private List<Subunit> asymmetricUnit = new ArrayList<>();
+
 
 	// TODO we should unify rotational and roto-translational results
 
@@ -255,6 +257,14 @@ public class QuatSymmetryResults {
 
 	public void setStructure(Structure structure) {
 		this.structure = structure;
+	}
+
+	public List<Subunit> getAsymmetricUnit() {
+		return asymmetricUnit;
+	}
+
+	public void setAsymmetricUnit(List<Subunit> asymmetricUnit) {
+		this.asymmetricUnit = asymmetricUnit;
 	}
 
 	@Override
